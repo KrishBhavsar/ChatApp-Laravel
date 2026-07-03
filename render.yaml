@@ -1,0 +1,66 @@
+# Render Blueprint — spins up the web service + a free Postgres DB.
+# Real-time uses ShouldBroadcastNow (in-request), so no worker service is needed.
+
+databases:
+  - name: chat-db
+    plan: free
+    databaseName: chat
+    user: chat
+
+services:
+  - type: web
+    name: chatmessage
+    runtime: docker
+    plan: free
+    dockerfilePath: ./Dockerfile
+    envVars:
+      - key: APP_NAME
+        value: Chat
+      - key: APP_ENV
+        value: production
+      - key: APP_DEBUG
+        value: "false"
+      - key: APP_KEY
+        sync: false            # set this manually in the dashboard (secret)
+      - key: APP_URL
+        sync: false            # set to your render URL after first deploy
+      - key: DB_CONNECTION
+        value: pgsql
+      # Pull DB connection details from the managed Postgres above:
+      - key: DB_HOST
+        fromDatabase:
+          name: chat-db
+          property: host
+      - key: DB_PORT
+        fromDatabase:
+          name: chat-db
+          property: port
+      - key: DB_DATABASE
+        fromDatabase:
+          name: chat-db
+          property: database
+      - key: DB_USERNAME
+        fromDatabase:
+          name: chat-db
+          property: user
+      - key: DB_PASSWORD
+        fromDatabase:
+          name: chat-db
+          property: password
+      - key: SESSION_DRIVER
+        value: database
+      - key: CACHE_STORE
+        value: database
+      - key: QUEUE_CONNECTION
+        value: sync
+      - key: BROADCAST_CONNECTION
+        value: pusher
+      # Your OWN Pusher keys — set these in the dashboard (secrets):
+      - key: PUSHER_APP_ID
+        sync: false
+      - key: PUSHER_APP_KEY
+        sync: false
+      - key: PUSHER_APP_SECRET
+        sync: false
+      - key: PUSHER_APP_CLUSTER
+        sync: false

@@ -1,0 +1,564 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Chat</title>
+<!-- Real-time: Pusher client + Laravel Echo (loaded from CDN) -->
+<script src="https://js.pusher.com/8.4.0/pusher.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/laravel-echo@1.16.1/dist/echo.iife.js"></script>
+<style>
+  :root{
+    --bg:#0b0e14; --sidebar:#12151f; --panel:#161a25; --panel2:#1d2230;
+    --border:#262b3a; --text:#e8eaf0; --muted:#8b93a7;
+    --accent:#6366f1; --accent2:#818cf8; --me:#4f46e5; --them:#232838;
+    --green:#22c55e; --red:#ef4444;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%}
+  body{
+    font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    background:var(--bg); color:var(--text); font-size:14.5px; overflow:hidden;
+  }
+  button{font-family:inherit;cursor:pointer}
+  input,textarea{font-family:inherit}
+
+  /* ---------- LOGIN ---------- */
+  #login{
+    height:100vh;display:flex;align-items:center;justify-content:center;padding:20px;
+    background:radial-gradient(1200px 600px at 50% -10%,rgba(99,102,241,.18),transparent);
+  }
+  .login-card{
+    width:100%;max-width:400px;background:var(--panel);border:1px solid var(--border);
+    border-radius:16px;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,.4);
+  }
+  .login-card h1{font-size:22px;margin-bottom:4px;display:flex;align-items:center;gap:10px}
+  .login-card .sub{color:var(--muted);font-size:13px;margin-bottom:24px}
+  .tabs{display:flex;gap:4px;background:var(--panel2);padding:4px;border-radius:10px;margin-bottom:20px}
+  .tabs button{flex:1;padding:9px;border:none;background:transparent;color:var(--muted);border-radius:7px;font-weight:600;font-size:13px}
+  .tabs button.on{background:var(--accent);color:#fff}
+  .field{margin-bottom:14px}
+  .field label{display:block;font-size:12px;color:var(--muted);margin-bottom:6px}
+  .field input{width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:11px 13px;border-radius:9px;font-size:14px;outline:none}
+  .field input:focus{border-color:var(--accent)}
+  .btn-primary{width:100%;background:var(--accent);color:#fff;border:none;padding:12px;border-radius:9px;font-weight:600;font-size:14px;margin-top:6px}
+  .btn-primary:hover{background:var(--accent2)}
+  .btn-primary:disabled{opacity:.6}
+  .err{color:var(--red);font-size:12.5px;margin-top:12px;min-height:16px}
+  .hint{color:var(--muted);font-size:11.5px;margin-top:14px;line-height:1.6}
+  .hidden{display:none!important}
+
+  /* ---------- APP SHELL ---------- */
+  #app{height:100vh;display:grid;grid-template-columns:320px 1fr}
+  @media(max-width:720px){#app{grid-template-columns:1fr}#app.show-chat .sidebar{display:none}#app:not(.show-chat) .chat{display:none}}
+
+  .sidebar{background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
+  .me{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
+  .avatar{width:40px;height:40px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-weight:700;color:#fff;flex-shrink:0}
+  .me .info{flex:1;min-width:0}
+  .me .name{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .me .email{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .icon-btn{background:transparent;border:none;color:var(--muted);padding:6px;border-radius:6px;font-size:16px}
+  .icon-btn:hover{background:var(--panel2);color:var(--text)}
+
+  .search{padding:12px 16px;border-bottom:1px solid var(--border)}
+  .search input{width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:8px;outline:none;font-size:13.5px}
+  #searchResults{position:absolute;top:calc(100% + 4px);left:16px;right:16px;background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.5);z-index:50;max-height:280px;overflow-y:auto}
+  .sresult{display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer}
+  .sresult:hover{background:var(--panel2)}
+  .sresult .info{flex:1;min-width:0}
+  .sresult .rn{font-weight:600;font-size:13.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sresult .re{color:var(--muted);font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sresult-empty{padding:14px 12px;color:var(--muted);font-size:12.5px;text-align:center}
+  .list-title{padding:12px 16px 6px;font-size:11px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);display:flex;justify-content:space-between;align-items:center}
+  .contacts{flex:1;overflow-y:auto;min-height:0}
+  .contact{display:flex;align-items:center;gap:12px;padding:11px 16px;cursor:pointer;border-left:3px solid transparent}
+  .contact:hover{background:var(--panel2)}
+  .contact.active{background:var(--panel2);border-left-color:var(--accent)}
+  .contact .info{flex:1;min-width:0}
+  .contact .cname{font-weight:600;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .contact .preview{color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+  .unread{background:var(--accent);color:#fff;font-size:11px;font-weight:700;min-width:20px;height:20px;border-radius:10px;display:flex;align-items:center;justify-content:center;padding:0 6px}
+  .contacts-empty{padding:24px 16px;color:var(--muted);font-size:13px;text-align:center;line-height:1.7}
+
+  /* ---------- CHAT ---------- */
+  .chat{display:flex;flex-direction:column;min-height:0;background:
+    linear-gradient(rgba(11,14,20,.96),rgba(11,14,20,.96));}
+  .chat-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;color:var(--muted);gap:12px}
+  .chat-empty .big{font-size:48px;opacity:.4}
+  .chat-head{padding:14px 18px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px;background:var(--panel)}
+  .chat-head .back{display:none}
+  @media(max-width:720px){.chat-head .back{display:block}}
+  .chat-head .cname{font-weight:600}
+  .chat-head .status{color:var(--muted);font-size:12px}
+  .chat-head .spacer{flex:1}
+  .messages{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:8px;min-height:0}
+  .msg{max-width:min(72%,520px);padding:9px 13px;border-radius:14px;font-size:14px;line-height:1.45;word-wrap:break-word;position:relative}
+  .msg .t{font-size:10.5px;opacity:.6;margin-top:4px;text-align:right}
+  .msg.them{background:var(--them);align-self:flex-start;border-bottom-left-radius:4px}
+  .msg.me{background:var(--me);color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
+  .msg .tick{margin-left:6px}
+  .day-sep{align-self:center;background:var(--panel2);color:var(--muted);font-size:11px;padding:4px 12px;border-radius:12px;margin:8px 0}
+  .composer{padding:14px 18px;border-top:1px solid var(--border);display:flex;gap:10px;align-items:flex-end;background:var(--panel)}
+  .composer textarea{flex:1;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:12px;padding:11px 14px;resize:none;max-height:120px;outline:none;font-size:14px;line-height:1.4}
+  .composer textarea:focus{border-color:var(--accent)}
+  .send-btn{background:var(--accent);border:none;color:#fff;width:44px;height:44px;border-radius:50%;font-size:18px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+  .send-btn:hover{background:var(--accent2)}
+  .send-btn:disabled{opacity:.5}
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--red);color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;z-index:100;box-shadow:0 8px 24px rgba(0,0,0,.4)}
+  .adminbar{padding:8px 16px;font-size:12px;color:var(--muted);border-top:1px solid var(--border)}
+  .adminbar a{color:var(--accent2);cursor:pointer}
+</style>
+</head>
+<body>
+
+<!-- ================= LOGIN ================= -->
+<div id="login">
+  <div class="login-card">
+    <h1>💬 Chat</h1>
+    <div class="sub">Sign in to start messaging</div>
+    <div class="tabs">
+      <button id="tabLogin" class="on" onclick="switchTab('login')">Login</button>
+      <button id="tabReg" onclick="switchTab('register')">Register</button>
+    </div>
+
+    <div id="regFields" class="hidden">
+      <div class="field"><label>Name</label><input id="i_name" placeholder="At least 5 characters"></div>
+      <div class="field"><label>Phone number</label><input id="i_phone" placeholder="10–15 digits"></div>
+    </div>
+    <div class="field"><label>Email</label><input id="i_email" type="email" placeholder="you@example.com"></div>
+    <div class="field"><label>Password</label><input id="i_password" type="password" placeholder="Your password"></div>
+
+    <button class="btn-primary" id="submitBtn" onclick="submitAuth()">Login</button>
+    <div class="err" id="loginErr"></div>
+  </div>
+</div>
+
+<!-- ================= APP ================= -->
+<div id="app" class="hidden">
+  <!-- SIDEBAR -->
+  <div class="sidebar">
+    <div class="me">
+      <div class="avatar" id="meAvatar"></div>
+      <div class="info">
+        <div class="name" id="meName"></div>
+        <div class="email" id="meEmail"></div>
+      </div>
+      <button class="icon-btn" title="Logout" onclick="logout()">⏻</button>
+    </div>
+    <div class="search" style="position:relative">
+      <input id="newChat" placeholder="Search users by name…" autocomplete="off"
+             oninput="onSearchInput()" onkeydown="if(event.key==='Escape')clearSearch()">
+      <div id="searchResults" class="hidden"></div>
+    </div>
+    <div class="list-title"><span>Conversations</span><button class="icon-btn" title="Refresh" onclick="loadContacts()">↻</button></div>
+    <div class="contacts" id="contacts"></div>
+    <div class="adminbar hidden" id="adminbar">👑 Admin — <a onclick="showAllChats()">view all chats</a></div>
+  </div>
+
+  <!-- CHAT -->
+  <div class="chat">
+    <div class="chat-empty" id="chatEmpty">
+      <div class="big">💬</div>
+      <div>Select a conversation to start messaging</div>
+      <div style="font-size:12.5px">or search a user by name to start a new chat</div>
+    </div>
+
+    <div id="chatView" class="hidden" style="display:flex;flex-direction:column;height:100%;min-height:0">
+      <div class="chat-head">
+        <button class="icon-btn back" onclick="backToList()">←</button>
+        <div class="avatar" id="peerAvatar" style="width:38px;height:38px;font-size:14px"></div>
+        <div>
+          <div class="cname" id="peerName"></div>
+          <div class="status" id="peerStatus">🟢 live</div>
+        </div>
+        <div class="spacer"></div>
+      </div>
+      <div class="messages" id="messages"></div>
+      <div class="composer">
+        <textarea id="composer" rows="1" placeholder="Type a message…" onkeydown="composerKey(event)" oninput="autogrow(this)"></textarea>
+        <button class="send-btn" id="sendBtn" onclick="sendMessage()">➤</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const API = location.origin + '/api';
+
+// ---- Real-time (Pusher) config ----
+// Swap these for your own Pusher app keys, or point at a local Reverb server.
+const PUSHER = {
+  key:     '55dfc25ef098d54d8f73',   // public app key (safe to expose)
+  cluster: 'ap2',
+  forceTLS: true,
+};
+
+let TOKEN = localStorage.getItem('chat_token') || '';
+let ME    = JSON.parse(localStorage.getItem('chat_me') || 'null');
+let PEER  = null;          // {id,name,email}
+let peerCache = {};        // id -> user
+let echo = null;           // Laravel Echo instance
+let currentChannel = null; // name of the private channel we're subscribed to
+let lastCount = 0;
+let authMode = 'login';
+
+const COLORS = ['#6366f1','#ec4899','#f59e0b','#10b981','#06b6d4','#8b5cf6','#ef4444','#14b8a6'];
+const colorFor = id => COLORS[Math.abs(Number(id)||0) % COLORS.length];
+const initials = n => (n||'?').split(' ').map(w=>w[0]).slice(0,2).join('').toUpperCase();
+const esc = s => (s??'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+
+// ---------- API helper ----------
+async function api(method, path, body){
+  const headers = {'Accept':'application/json'};
+  if(body) headers['Content-Type']='application/json';
+  if(TOKEN) headers['Authorization']='Bearer '+TOKEN;
+  const res = await fetch(API+path,{method,headers,body:body?JSON.stringify(body):undefined});
+  let json=null; try{ json = await res.json(); }catch{}
+  return {ok:res.ok, status:res.status, json};
+}
+function toast(msg){
+  const t=document.createElement('div'); t.className='toast'; t.textContent=msg;
+  document.body.appendChild(t); setTimeout(()=>t.remove(),3200);
+}
+
+// ---------- Auth ----------
+function switchTab(m){
+  authMode=m;
+  document.getElementById('tabLogin').classList.toggle('on',m==='login');
+  document.getElementById('tabReg').classList.toggle('on',m==='register');
+  document.getElementById('regFields').classList.toggle('hidden',m!=='register');
+  document.getElementById('submitBtn').textContent = m==='login'?'Login':'Create account';
+  document.getElementById('loginErr').textContent='';
+}
+async function submitAuth(){
+  const err=document.getElementById('loginErr'); err.textContent='';
+  const btn=document.getElementById('submitBtn'); btn.disabled=true;
+  const email=v('i_email'), password=v('i_password');
+  try{
+    if(authMode==='register'){
+      const r=await api('POST','/register',{name:v('i_name'),email,password,phone_number:v('i_phone')});
+      if(!r.ok){ err.textContent=firstError(r.json); btn.disabled=false; return; }
+      // auto-login after register
+    }
+    const r=await api('POST','/login',{email,password});
+    if(!r.ok || !r.json?.message?.token){ err.textContent=firstError(r.json)||'Login failed'; btn.disabled=false; return; }
+    TOKEN=r.json.message.token; ME=r.json.message.user;
+    localStorage.setItem('chat_token',TOKEN); localStorage.setItem('chat_me',JSON.stringify(ME));
+    enterApp();
+  }catch(e){ err.textContent='Network error: '+e.message; }
+  btn.disabled=false;
+}
+function firstError(j){
+  if(!j) return '';
+  if(j.errors) return Object.values(j.errors)[0][0];
+  if(typeof j.message==='string') return j.message;
+  return '';
+}
+function logout(){
+  api('GET','/logout').finally(()=>{
+    TOKEN=''; ME=null; PEER=null; unsubscribe();
+    if(echo){ echo.disconnect(); echo=null; }
+    localStorage.removeItem('chat_token'); localStorage.removeItem('chat_me');
+    document.getElementById('app').classList.add('hidden');
+    document.getElementById('login').classList.remove('hidden');
+  });
+}
+
+// ---------- Enter app ----------
+function enterApp(){
+  document.getElementById('login').classList.add('hidden');
+  document.getElementById('app').classList.remove('hidden');
+  document.getElementById('meAvatar').textContent=initials(ME.name);
+  document.getElementById('meAvatar').style.background=colorFor(ME.id);
+  document.getElementById('meName').textContent=ME.name;
+  document.getElementById('meEmail').textContent=ME.email;
+  document.getElementById('adminbar').classList.toggle('hidden', ME.role!=='admin');
+  loadContacts();
+  subscribeToMe();   // listen on my personal channel so NEW conversations appear live
+}
+
+// ---------- Contacts ----------
+async function loadContacts(){
+  const r=await api('GET','/chat/contacts/'+ME.id);
+  const box=document.getElementById('contacts');
+  const list = r.ok ? (r.json?.data||[]) : [];
+  if(!list.length){
+    box.innerHTML='<div class="contacts-empty">No conversations yet.<br>Type a user id above to start one.</div>';
+    return;
+  }
+  box.innerHTML='';
+  list.forEach(u=>{
+    peerCache[u.id]={id:u.id,name:u.name,email:u.email};
+    const last=u.last_message;
+    const preview = last ? (last.sender_id===ME.id?'You: ':'')+ (last.message_text||'['+last.message_type+']') : 'Tap to chat';
+    const div=document.createElement('div');
+    div.className='contact'+(PEER&&PEER.id===u.id?' active':'');
+    div.onclick=()=>openChat(u.id,u.name,u.email);
+    div.innerHTML=
+      `<div class="avatar" style="background:${colorFor(u.id)}">${initials(u.name)}</div>`+
+      `<div class="info"><div class="cname">${esc(u.name)}</div>`+
+      `<div class="preview">${esc(preview)}</div></div>`;
+    box.appendChild(div);
+  });
+}
+
+// ---------- User search (start a new chat by name) ----------
+let searchTimer=null;
+function onSearchInput(){
+  const term=v('newChat').trim();
+  clearTimeout(searchTimer);
+  if(term.length<1){ clearSearch(); return; }
+  // debounce so we don't fire a request on every keystroke
+  searchTimer=setTimeout(()=>runSearch(term),250);
+}
+async function runSearch(term){
+  const box=document.getElementById('searchResults');
+  const r=await api('GET','/users/search?search='+encodeURIComponent(term));
+  const users = r.ok ? (r.json?.data||[]) : [];
+  box.classList.remove('hidden');
+  if(!users.length){
+    box.innerHTML='<div class="sresult-empty">No users found</div>';
+    return;
+  }
+  box.innerHTML='';
+  users.forEach(u=>{
+    peerCache[u.id]={id:u.id,name:u.name,email:u.email};
+    const div=document.createElement('div');
+    div.className='sresult';
+    div.onclick=()=>{ clearSearch(); openChat(u.id,u.name,u.email); };
+    div.innerHTML=
+      `<div class="avatar" style="width:34px;height:34px;font-size:13px;background:${colorFor(u.id)}">${initials(u.name)}</div>`+
+      `<div class="info"><div class="rn">${esc(u.name)}</div><div class="re">${esc(u.email)}</div></div>`;
+    box.appendChild(div);
+  });
+}
+function clearSearch(){
+  document.getElementById('newChat').value='';
+  const box=document.getElementById('searchResults');
+  box.classList.add('hidden'); box.innerHTML='';
+}
+
+// ---------- Open a conversation ----------
+function openChat(id,name,email){
+  PEER={id,name,email};
+  document.getElementById('chatEmpty').classList.add('hidden');
+  document.getElementById('chatView').classList.remove('hidden');
+  document.getElementById('app').classList.add('show-chat');
+  document.getElementById('peerAvatar').textContent=initials(name);
+  document.getElementById('peerAvatar').style.background=colorFor(id);
+  document.getElementById('peerName').textContent=name;
+  lastCount=0;
+  document.getElementById('messages').innerHTML='';
+  loadContacts(); // refresh active highlight
+  loadHistory(true);
+  markRead();          // opening a chat marks the peer's messages to me as read
+  document.querySelector('.composer').style.display='flex';
+  subscribeToPeer();
+  document.getElementById('composer').focus();
+}
+function backToList(){ document.getElementById('app').classList.remove('show-chat'); }
+
+// ---------- History + render ----------
+async function loadHistory(scroll){
+  if(!PEER) return;
+  const r=await api('GET',`/chat/history/${ME.id}/${PEER.id}`);
+  if(!r.ok){
+    if(r.status===401){ toast('Session expired'); logout(); return; }
+    document.getElementById('messages').innerHTML='<div class="chat-empty" style="flex:1"><div>Could not load messages.</div><div style="font-size:12px">'+esc(firstError(r.json))+'</div></div>';
+    return;
+  }
+  const msgs=r.json?.data||[];
+  // learn peer's real name from the payload
+  const sample=msgs.find(m=>m.sender&&m.sender.sender_id===PEER.id)||msgs.find(m=>m.receiver&&m.receiver.receiver_id===PEER.id);
+  if(sample){
+    const p = sample.sender?.sender_id===PEER.id ? sample.sender : sample.receiver;
+    const realName = p.name;
+    if(realName && realName!==PEER.name){
+      PEER.name=realName; peerCache[PEER.id]={id:PEER.id,name:realName,email:p.email};
+      document.getElementById('peerName').textContent=realName;
+      document.getElementById('peerAvatar').textContent=initials(realName);
+    }
+  }
+  if(msgs.length===lastCount && !scroll) return; // nothing new
+  lastCount=msgs.length;
+  renderMessages(msgs, scroll);
+}
+function renderMessages(msgs, scroll){
+  const box=document.getElementById('messages');
+  const atBottom = box.scrollHeight-box.scrollTop-box.clientHeight < 80;
+  if(!msgs.length){ box.innerHTML='<div class="chat-empty" style="flex:1"><div>No messages yet — say hi 👋</div></div>'; return; }
+  let html=''; let lastDay='';
+  msgs.forEach(m=>{
+    const d=new Date(m.created_at||m.sent_at);
+    const day=d.toLocaleDateString(undefined,{month:'short',day:'numeric'});
+    if(day!==lastDay){ html+=`<div class="day-sep">${day}</div>`; lastDay=day; }
+    const mine=m.sender_id===ME.id;
+    const time=d.toLocaleTimeString(undefined,{hour:'2-digit',minute:'2-digit'});
+    const tick=mine?`<span class="tick">${m.is_read?'✓✓':'✓'}</span>`:'';
+    const attach = m.attachment_url?`<div style="font-size:12px;opacity:.85;margin-bottom:4px">📎 <a href="${esc(m.attachment_url)}" target="_blank" style="color:inherit">${esc(m.attachment_url)}</a></div>`:'';
+    const typeTag = (m.message_type&&m.message_type!=='text')?`<span style="font-size:10px;opacity:.7;text-transform:uppercase">[${m.message_type}] </span>`:'';
+    html+=`<div class="msg ${mine?'me':'them'}">${attach}${typeTag}${esc(m.message_text)}<div class="t">${time}${tick}</div></div>`;
+  });
+  box.innerHTML=html;
+  if(scroll||atBottom) box.scrollTop=box.scrollHeight;
+}
+
+// ---------- Send ----------
+async function sendMessage(){
+  const ta=document.getElementById('composer');
+  const text=ta.value.trim();
+  if(!text||!PEER) return;
+  const btn=document.getElementById('sendBtn'); btn.disabled=true;
+  const r=await api('POST','/chat/send',{
+    sender_id:ME.id, receiver_id:PEER.id, message_text:text,
+    message_type:'text', entity_type:'project', entity_id:1
+  });
+  btn.disabled=false;
+  if(!r.ok){ toast(firstError(r.json)||'Failed to send'); return; }
+  ta.value=''; autogrow(ta);
+  await loadHistory(true);
+  loadContacts();
+}
+function composerKey(e){
+  if(e.key==='Enter' && !e.shiftKey){ e.preventDefault(); sendMessage(); }
+}
+function autogrow(el){ el.style.height='auto'; el.style.height=Math.min(el.scrollHeight,120)+'px'; }
+
+// ---------- Mark read ----------
+// Called automatically when a chat is opened (marks the PEER's messages to ME as read).
+async function markRead(){
+  if(!PEER) return;
+  await api('POST',`/chat/mark-as-read/${PEER.id}/${ME.id}`);
+}
+
+// ---------- Admin: all chats ----------
+async function showAllChats(){
+  const r=await api('GET','/chat/all');
+  if(!r.ok){ toast(firstError(r.json)||'Admin only'); return; }
+  const msgs=r.json?.data||[];
+  document.getElementById('chatEmpty').classList.add('hidden');
+  document.getElementById('chatView').classList.remove('hidden');
+  document.getElementById('app').classList.add('show-chat');
+  PEER=null; unsubscribe();
+  document.getElementById('peerName').textContent='👑 All chats (admin)';
+  document.getElementById('peerAvatar').textContent='👑';
+  document.getElementById('peerAvatar').style.background='#f59e0b';
+  document.getElementById('peerStatus').textContent=msgs.length+' messages system-wide';
+  const box=document.getElementById('messages');
+  box.innerHTML = msgs.map(m=>{
+    const d=new Date(m.created_at||m.sent_at);
+    return `<div class="msg them" style="max-width:90%">
+      <div style="font-size:11px;color:var(--accent2);margin-bottom:3px">${esc(m.sender?.name||('#'+m.sender_id))} → ${esc(m.receiver?.name||('#'+m.receiver_id))}</div>
+      ${esc(m.message_text)}
+      <div class="t">${d.toLocaleString()}</div></div>`;
+  }).join('') || '<div class="chat-empty" style="flex:1">No messages in the system.</div>';
+  document.getElementById('composer').closest('.composer').style.display='none';
+}
+
+// ---------- Real-time (Pusher / Laravel Echo) ----------
+// Build the Echo instance once. The custom authorizer is REQUIRED because our
+// /broadcasting/auth route is protected by auth:sanctum — Pusher must send our
+// Bearer token when it asks Laravel for permission to join a private channel.
+function initEcho(){
+  if(echo) return echo;
+  echo = new Echo({
+    broadcaster: 'pusher',
+    key: PUSHER.key,
+    cluster: PUSHER.cluster,
+    forceTLS: PUSHER.forceTLS,
+    authorizer: (channel) => ({
+      authorize: (socketId, callback) => {
+        // The broadcast-auth route lives at the app root (NOT under /api),
+        // and needs our Bearer token, so we call fetch() directly here.
+        fetch(location.origin + '/broadcasting/auth', {
+          method:'POST',
+          headers:{
+            'Content-Type':'application/json',
+            'Accept':'application/json',
+            'Authorization':'Bearer '+TOKEN,
+          },
+          body: JSON.stringify({ socket_id: socketId, channel_name: channel.name }),
+        })
+        .then(res => res.ok ? res.json() : Promise.reject(res))
+        .then(data => callback(null, data))
+        .catch(err => callback(err, null));
+      }
+    }),
+  });
+
+  // ---- Connection diagnostics (watch these in the Console) ----
+  const pc = echo.connector.pusher.connection;
+  pc.bind('connecting', () => console.log('%c[Pusher] connecting…','color:#f59e0b'));
+  pc.bind('connected',  () => console.log('%c[Pusher] ✅ CONNECTED (socket '+pc.socket_id+')','color:#22c55e;font-weight:bold'));
+  pc.bind('unavailable',() => console.warn('[Pusher] ⚠️ unavailable — check key/cluster/internet'));
+  pc.bind('failed',     () => console.error('[Pusher] ❌ failed — browser cannot use WebSockets'));
+  pc.bind('disconnected',()=> console.warn('[Pusher] disconnected'));
+  pc.bind('error', (e) => console.error('[Pusher] error', e));
+
+  return echo;
+}
+
+// Subscribe to the private channel for the ME<->PEER conversation.
+// Channel name uses the SAME min/max trick as the backend broadcastOn().
+function subscribeToPeer(){
+  if(!PEER || !TOKEN) return;
+  initEcho();
+  const name = `chat-${Math.min(ME.id,PEER.id)}-${Math.max(ME.id,PEER.id)}`;
+  if(currentChannel === name) return;   // already listening
+  unsubscribe();                        // leave any previous chat's channel
+  currentChannel = name;
+  console.log('%c[Echo] subscribing to private-'+name,'color:#818cf8');
+  const ch = echo.private(name);
+  // Pusher fires this once the /broadcasting/auth handshake succeeds and we've joined:
+  ch.subscribed(() => console.log('%c[Echo] ✅ JOINED private-'+name+' — now listening','color:#22c55e;font-weight:bold'));
+  ch.listen('.message.sent', (data) => {
+      console.log('%c[Echo] 📩 message.sent received:','color:#22c55e', data);
+      // A new message hit this conversation. The broadcast payload's id can be
+      // unreliable (message_id vs id on the backend), so just re-pull history —
+      // it's one request, only when something actually arrives (not every 2s).
+      loadHistory(true);
+      loadContacts();
+    })
+    .error((e) => {
+      // Usually a 403 from /broadcasting/auth (not a participant) or bad keys.
+      document.getElementById('peerStatus').textContent = '⚠️ live connection failed';
+      console.error('[Echo] ❌ channel error (likely 403 from /broadcasting/auth or bad keys)', e);
+    });
+}
+function unsubscribe(){
+  if(echo && currentChannel){ echo.leave(currentChannel); }
+  currentChannel = null;
+}
+
+// My personal channel — subscribed once at login and kept for the whole session.
+// It receives EVERY message involving me, so a brand-new conversation from someone
+// I've never talked to still shows up live (no refresh needed).
+function subscribeToMe(){
+  if(!ME || !TOKEN) return;
+  initEcho();
+  const name = `chat-user.${ME.id}`;
+  console.log('%c[Echo] subscribing to personal channel private-'+name,'color:#818cf8');
+  const ch = echo.private(name);
+  ch.subscribed(() => console.log('%c[Echo] ✅ JOINED personal '+name,'color:#22c55e;font-weight:bold'));
+  ch.listen('.message.sent', (data) => {
+      console.log('%c[Echo] 🔔 personal event:','color:#22c55e', data);
+      // Always refresh the sidebar so new/updated conversations appear.
+      loadContacts();
+      // If the message belongs to the chat I currently have open, refresh it too.
+      if(PEER && data && (data.sender_id===PEER.id || data.receiver_id===PEER.id)){
+        loadHistory(true);
+      }
+    })
+    .error((e) => console.error('[Echo] ❌ personal channel error', e));
+}
+window.addEventListener('beforeunload', unsubscribe);
+
+// ---------- utils ----------
+function v(id){return document.getElementById(id).value;}
+
+// ---------- boot ----------
+if(TOKEN && ME){ enterApp(); }
+</script>
+</body>
+</html>
