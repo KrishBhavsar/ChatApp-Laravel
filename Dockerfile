@@ -2,12 +2,21 @@
 # Real-time broadcasts fire in-request (ShouldBroadcastNow), so NO queue worker
 # is needed — a single web process is enough.
 
-FROM php:8.2-cli
+# PHP 8.4 — your composer.lock pulled Symfony 8 packages that require php >= 8.4.
+FROM php:8.4-cli
 
-# System deps + PHP extensions Laravel needs (incl. pdo_pgsql for Render Postgres).
+# System libraries needed to COMPILE the PHP extensions below.
+# NOTE: curl, dom, xml, fileinfo, pdo are already bundled in the base image — do NOT
+# reinstall them (that errors). Only install the ones actually missing.
 RUN apt-get update && apt-get install -y \
-    git unzip libzip-dev libpq-dev libonig-dev \
-    && docker-php-ext-install pdo pdo_pgsql pdo_mysql mbstring bcmath zip \
+    git unzip \
+    libzip-dev libpq-dev libonig-dev \
+    libpng-dev libjpeg-dev libfreetype6-dev \
+    libicu-dev \
+    && docker-php-ext-configure gd --with-freetype --with-jpeg \
+    && docker-php-ext-install \
+        pdo_pgsql pdo_mysql \
+        mbstring bcmath zip gd intl \
     && rm -rf /var/lib/apt/lists/*
 
 # Composer
