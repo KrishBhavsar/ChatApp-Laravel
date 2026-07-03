@@ -28,13 +28,17 @@ WORKDIR /app
 COPY composer.json composer.lock ./
 RUN composer install --no-dev --optimize-autoloader --no-scripts --no-interaction
 
-# App code
+# App code.
+# --no-scripts is REQUIRED: without it, dump-autoload runs `artisan package:discover`,
+# which BOOTS the app at build time — but there's no .env/APP_KEY/DB during the build,
+# so it crashes. We defer all artisan work to container start (CMD below).
 COPY . .
-RUN composer dump-autoload --optimize
+RUN composer dump-autoload --optimize --no-scripts
 
-# Render provides $PORT at runtime. Migrate + cache, then serve.
-# (artisan serve is acceptable for a small app; upgrade to Octane/FrankenPHP later.)
-CMD php artisan migrate --force \
+# Render provides $PORT + all env vars at runtime. NOW the app can boot, so we run
+# package discovery, migrate, cache, and serve — all at container start.
+CMD php artisan package:discover --ansi \
+    && php artisan migrate --force \
     && php artisan config:cache \
     && php artisan route:cache \
     && php artisan serve --host=0.0.0.0 --port=${PORT:-8000}
