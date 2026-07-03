@@ -96,10 +96,15 @@ class ChatMessageRepository implements ChatMessageInterface
      */
     public function searchUsers(string $term, int $excludeUserId)
     {
+        $needle = '%' . strtolower($term) . '%';
+
         return User::where('id', '!=', $excludeUserId)
-            ->where(function ($query) use ($term) {
-                $query->where('name', 'like', "%{$term}%")
-                    ->orWhere('email', 'like', "%{$term}%");
+            ->where(function ($query) use ($needle) {
+                // LOWER() on both sides = case-insensitive match on ANY database
+                // (Postgres LIKE is case-sensitive; mobile keyboards auto-capitalize,
+                // which broke search on phones while working on desktop).
+                $query->whereRaw('LOWER(name) LIKE ?', [$needle])
+                    ->orWhereRaw('LOWER(email) LIKE ?', [$needle]);
             })
             ->limit(20)
             ->get(['id', 'name', 'email']);
