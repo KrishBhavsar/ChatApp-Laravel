@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
 <title>Chat</title>
 <!-- Real-time: Pusher client + Laravel Echo (loaded from CDN) -->
 <script src="https://js.pusher.com/8.4.0/pusher.min.js"></script>
@@ -19,6 +19,12 @@
   body{
     font-family:ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
     background:var(--bg); color:var(--text); font-size:14.5px; overflow:hidden;
+    -webkit-text-size-adjust:100%;
+  }
+  /* use the dynamic viewport height on mobile so the address bar doesn't crop the UI */
+  @supports (height:100dvh){
+    #login{height:100dvh}
+    #app{height:100dvh}
   }
   button{font-family:inherit;cursor:pointer}
   input,textarea{font-family:inherit}
@@ -31,6 +37,11 @@
   .login-card{
     width:100%;max-width:400px;background:var(--panel);border:1px solid var(--border);
     border-radius:16px;padding:32px;box-shadow:0 20px 60px rgba(0,0,0,.4);
+  }
+  @media(max-width:420px){
+    #login{padding:14px}
+    .login-card{padding:24px 20px;border-radius:14px}
+    .login-card h1{font-size:20px}
   }
   .login-card h1{font-size:22px;margin-bottom:4px;display:flex;align-items:center;gap:10px}
   .login-card .sub{color:var(--muted);font-size:13px;margin-bottom:24px}
@@ -49,8 +60,16 @@
   .hidden{display:none!important}
 
   /* ---------- APP SHELL ---------- */
+  /* Desktop: fixed sidebar + fluid chat. Widens on large screens, narrows on tablets. */
   #app{height:100vh;display:grid;grid-template-columns:320px 1fr}
-  @media(max-width:720px){#app{grid-template-columns:1fr}#app.show-chat .sidebar{display:none}#app:not(.show-chat) .chat{display:none}}
+  @media(min-width:1400px){#app{grid-template-columns:380px 1fr}}
+  @media(max-width:960px){#app{grid-template-columns:280px 1fr}}
+  /* Phones/small tablets: single column — swap between list and chat views. */
+  @media(max-width:720px){
+    #app{grid-template-columns:1fr}
+    #app.show-chat .sidebar{display:none}
+    #app:not(.show-chat) .chat{display:none}
+  }
 
   .sidebar{background:var(--sidebar);border-right:1px solid var(--border);display:flex;flex-direction:column;min-height:0}
   .me{padding:16px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:12px}
@@ -99,7 +118,7 @@
   .msg.me{background:var(--me);color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
   .msg .tick{margin-left:6px}
   .day-sep{align-self:center;background:var(--panel2);color:var(--muted);font-size:11px;padding:4px 12px;border-radius:12px;margin:8px 0}
-  .composer{padding:14px 18px;border-top:1px solid var(--border);display:flex;gap:10px;align-items:flex-end;background:var(--panel)}
+  .composer{padding:14px 18px;padding-bottom:calc(14px + env(safe-area-inset-bottom));border-top:1px solid var(--border);display:flex;gap:10px;align-items:flex-end;background:var(--panel)}
   .composer textarea{flex:1;background:var(--panel2);border:1px solid var(--border);color:var(--text);border-radius:12px;padding:11px 14px;resize:none;max-height:120px;outline:none;font-size:14px;line-height:1.4}
   .composer textarea:focus{border-color:var(--accent)}
   .send-btn{background:var(--accent);border:none;color:#fff;width:44px;height:44px;border-radius:50%;font-size:18px;display:flex;align-items:center;justify-content:center;flex-shrink:0}
@@ -108,6 +127,30 @@
   .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:var(--red);color:#fff;padding:10px 18px;border-radius:10px;font-size:13px;z-index:100;box-shadow:0 8px 24px rgba(0,0,0,.4)}
   .adminbar{padding:8px 16px;font-size:12px;color:var(--muted);border-top:1px solid var(--border)}
   .adminbar a{color:var(--accent2);cursor:pointer}
+
+  /* Keep the top-of-sidebar clear of notches on phones in single-column mode */
+  @media(max-width:720px){
+    .sidebar .me{padding-top:calc(16px + env(safe-area-inset-top))}
+    .chat-head{padding-top:calc(14px + env(safe-area-inset-top))}
+    .msg{max-width:85%}
+    .messages{padding:14px}
+    .chat-head{padding-left:14px;padding-right:14px}
+    .composer{padding-left:12px;padding-right:12px}
+  }
+  @media(max-width:400px){
+    body{font-size:14px}
+    .messages{padding:12px 10px}
+    .msg{max-width:88%;font-size:13.5px}
+    .me{padding:12px}
+    .search{padding:10px 12px}
+    .contact{padding:10px 12px}
+    .send-btn{width:42px;height:42px}
+  }
+  /* On coarse-pointer (touch) devices give tap targets a little more room */
+  @media(pointer:coarse){
+    .icon-btn{padding:8px}
+    .contact{padding-top:13px;padding-bottom:13px}
+  }
 </style>
 </head>
 <body>
