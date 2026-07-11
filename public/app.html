@@ -151,6 +151,42 @@
     .icon-btn{padding:8px}
     .contact{padding-top:13px;padding-bottom:13px}
   }
+
+  /* ---------- VOICE CALL ---------- */
+  /* Round call button in the chat header */
+  .call-btn{background:transparent;border:none;color:var(--muted);padding:8px;border-radius:8px;font-size:18px;line-height:1}
+  .call-btn:hover{background:var(--panel2);color:var(--green)}
+  .call-btn:disabled{opacity:.4;cursor:not-allowed}
+
+  /* Full-screen dim behind any call surface */
+  .call-overlay{position:fixed;inset:0;background:rgba(6,8,13,.72);backdrop-filter:blur(4px);z-index:200;display:flex;align-items:center;justify-content:center;padding:20px}
+  .call-card{width:100%;max-width:340px;background:var(--panel);border:1px solid var(--border);border-radius:20px;padding:32px 28px;box-shadow:0 24px 70px rgba(0,0,0,.55);text-align:center}
+  .call-card .call-avatar{width:88px;height:88px;border-radius:50%;margin:0 auto 18px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:32px;color:#fff}
+  .call-card .call-name{font-size:19px;font-weight:600;margin-bottom:4px}
+  .call-card .call-state{color:var(--muted);font-size:13.5px;margin-bottom:24px;min-height:18px}
+  .call-actions{display:flex;gap:16px;justify-content:center}
+  .call-round{width:60px;height:60px;border-radius:50%;border:none;color:#fff;font-size:24px;display:flex;align-items:center;justify-content:center}
+  .call-accept{background:var(--green)}.call-accept:hover{filter:brightness(1.1)}
+  .call-decline,.call-hangup{background:var(--red)}.call-decline:hover,.call-hangup:hover{filter:brightness(1.1)}
+  .call-mute{background:var(--panel2);color:var(--text)}.call-mute.on{background:var(--accent);color:#fff}
+  .call-action-label{font-size:11px;color:var(--muted);margin-top:6px}
+  .call-action{display:flex;flex-direction:column;align-items:center}
+  /* subtle pulse for the ringing avatar */
+  @keyframes callpulse{0%{box-shadow:0 0 0 0 rgba(99,102,241,.5)}70%{box-shadow:0 0 0 18px rgba(99,102,241,0)}100%{box-shadow:0 0 0 0 rgba(99,102,241,0)}}
+  .call-card.ringing .call-avatar{animation:callpulse 1.6s infinite}
+
+  /* Video-call stage: remote fills the screen, local is a small self-view (PiP). */
+  .video-stage{position:fixed;inset:0;background:#05070c;z-index:190;display:none}
+  .video-stage.on{display:block}
+  #remoteVideo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;background:#05070c}
+  #localVideo{position:absolute;right:16px;bottom:calc(120px + env(safe-area-inset-bottom));width:118px;height:158px;object-fit:cover;border-radius:14px;border:2px solid rgba(255,255,255,.35);box-shadow:0 8px 24px rgba(0,0,0,.5);background:#11141f;z-index:2;transform:scaleX(-1)}
+  /* while still connecting there's no remote frame yet — show the peer name over black */
+  .video-hint{position:absolute;top:0;left:0;right:0;padding:calc(18px + env(safe-area-inset-top)) 18px 18px;color:#fff;z-index:2;text-align:center;pointer-events:none;text-shadow:0 1px 4px rgba(0,0,0,.6)}
+  .video-hint .vn{font-size:18px;font-weight:600}
+  .video-hint .vs{font-size:13px;opacity:.85;margin-top:2px}
+  /* control bar pinned to the bottom of the video stage */
+  .video-controls{position:absolute;left:0;right:0;bottom:0;padding:20px 18px calc(28px + env(safe-area-inset-bottom));display:flex;gap:18px;justify-content:center;z-index:3;background:linear-gradient(transparent,rgba(0,0,0,.55))}
+  @media(max-width:720px){#localVideo{width:96px;height:128px;right:12px}}
 </style>
 </head>
 <body>
@@ -216,6 +252,8 @@
           <div class="status" id="peerStatus">🟢 live</div>
         </div>
         <div class="spacer"></div>
+        <button class="call-btn" id="callBtn" title="Voice call" onclick="startCall('audio')">📞</button>
+        <button class="call-btn" id="videoBtn" title="Video call" onclick="startCall('video')">🎥</button>
       </div>
       <div class="messages" id="messages"></div>
       <div class="composer">
@@ -224,6 +262,30 @@
       </div>
     </div>
   </div>
+</div>
+
+<!-- ================= VOICE CALL UI ================= -->
+<!-- Remote audio (the other person's voice) plays here. Hidden, autoplays. -->
+<audio id="remoteAudio" autoplay playsinline></audio>
+
+<div id="callOverlay" class="call-overlay hidden">
+  <div class="call-card" id="callCard">
+    <div class="call-avatar" id="callAvatar"></div>
+    <div class="call-name" id="callName"></div>
+    <div class="call-state" id="callState"></div>
+    <div class="call-actions" id="callActions"></div>
+  </div>
+</div>
+
+<!-- Full-screen video stage (used only for video calls that are connecting/live) -->
+<div id="videoStage" class="video-stage">
+  <video id="remoteVideo" autoplay playsinline></video>
+  <video id="localVideo" autoplay playsinline muted></video>
+  <div class="video-hint" id="videoHint">
+    <div class="vn" id="videoName"></div>
+    <div class="vs" id="videoState"></div>
+  </div>
+  <div class="video-controls" id="videoControls"></div>
 </div>
 
 <script>
@@ -593,9 +655,415 @@ function subscribeToMe(){
         loadHistory(true);
       }
     })
+    // Voice-call signaling arrives on this same personal channel.
+    .listen('.call.signal', (data) => {
+      console.log('%c[Echo] 📞 call.signal:','color:#22c55e', data && data.type, data);
+      onCallSignal(data);
+    })
     .error((e) => console.error('[Echo] ❌ personal channel error', e));
 }
 window.addEventListener('beforeunload', unsubscribe);
+
+// ==========================================================================
+//  VOICE CALLING (WebRTC, peer-to-peer, STUN-only)
+// --------------------------------------------------------------------------
+//  Audio flows directly browser<->browser. The server only relays the small
+//  "signaling" blobs (offer / answer / ICE candidates / hangup) over the same
+//  Pusher personal channel used for chat. No media ever touches the backend.
+//
+//  Call lifecycle (states):
+//    idle       -> no call
+//    calling    -> I dialed, waiting for the other side to answer
+//    ringing    -> someone is calling me, I haven't accepted yet
+//    connecting -> accepted; ICE is negotiating a path
+//    in-call    -> audio connected
+// ==========================================================================
+
+// Free public STUN servers (Google). STUN only discovers our public address;
+// it does NOT relay audio, so it stays free. Add a TURN entry here later if you
+// need calls to survive strict mobile/corporate NATs.
+const ICE_SERVERS = [
+  { urls: 'stun:stun.l.google.com:19302' },
+  { urls: 'stun:stun1.l.google.com:19302' },
+];
+
+const call = {
+  state: 'idle',      // idle | calling | ringing | connecting | in-call
+  kind: 'audio',      // audio | video
+  peerId: null,       // the OTHER user's id
+  peerName: '',       // the OTHER user's name (for the modal)
+  pc: null,           // RTCPeerConnection
+  localStream: null,  // our microphone (+ camera for video calls)
+  muted: false,
+  camOff: false,      // video calls: is our camera turned off?
+  timerId: null,
+  startedAt: 0,
+  // ICE candidates that arrive before the remote description is set must be
+  // buffered, else addIceCandidate() throws.
+  pendingIce: [],
+};
+
+// ---- send a signaling blob to the other user via the backend relay ----
+async function sendSignal(type, toId, payload){
+  const r = await api('POST','/chat/call-signal',{ to_id: toId, type, payload: payload||null });
+  if(!r.ok) console.error('[call] signal send failed', type, r.status, r.json);
+  return r.ok;
+}x
+
+// ---- SDP encode/decode (gzip + base64) ----
+// Two problems solved here:
+//  1) The SDP is a multi-line CRLF string — raw JSON round-tripping can mangle
+//     the newlines ("Invalid SDP line"). Encoding to opaque bytes avoids that.
+//  2) A VIDEO offer SDP is large and Pusher rejects any event over 10 KB.
+//     So we GZIP the SDP first (compresses ~5-8x) before base64 — a video offer
+//     then fits comfortably under the limit. Uses the browser-native
+//     CompressionStream (Chrome/Edge/Safari/Firefox all support it).
+async function gzip(str){
+  const cs = new CompressionStream('gzip');
+  const blob = await new Response(
+    new Blob([new TextEncoder().encode(str)]).stream().pipeThrough(cs)
+  ).blob();
+  const bytes = new Uint8Array(await blob.arrayBuffer());
+  // base64 of the compressed bytes (chunked to avoid arg-length limits)
+  let bin = '';
+  for(let i=0;i<bytes.length;i+=0x8000){ bin += String.fromCharCode.apply(null, bytes.subarray(i,i+0x8000)); }
+  return btoa(bin);
+}
+async function gunzip(b64){
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for(let i=0;i<bin.length;i++){ bytes[i] = bin.charCodeAt(i); }
+  const ds = new DecompressionStream('gzip');
+  const blob = await new Response(new Blob([bytes]).stream().pipeThrough(ds)).blob();
+  return await blob.text();
+}
+async function packSdp(desc){
+  return { type: desc.type, gz: await gzip(desc.sdp) };
+}
+async function unpackSdp(obj){
+  return new RTCSessionDescription({ type: obj.type, sdp: await gunzip(obj.gz) });
+}
+
+// ---- build the RTCPeerConnection and wire its event handlers ----
+function makePeerConnection(otherId){
+  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+
+  // Our locally-discovered network paths -> ship each to the other side.
+  pc.onicecandidate = (e) => {
+    if(e.candidate){ sendSignal('ice', otherId, { candidate: e.candidate }); }
+  };
+
+  // The other person's media arrived -> play it. For a video call the remote
+  // stream carries BOTH audio and video, so we attach it to the <video> element
+  // (which plays its own audio) and leave remoteAudio empty to avoid echo.
+  pc.ontrack = (e) => {
+    console.log('%c[call] 🔊 remote '+e.track.kind+' track received','color:#22c55e');
+    if(call.kind === 'video'){
+      document.getElementById('remoteVideo').srcObject = e.streams[0];
+    }else{
+      document.getElementById('remoteAudio').srcObject = e.streams[0];
+    }
+  };
+
+  pc.oniceconnectionstatechange = () => {
+    console.log('%c[call] ICE state: '+pc.iceConnectionState, 'color:#06b6d4');
+  };
+  pc.onicegatheringstatechange = () => {
+    console.log('[call] ICE gathering:', pc.iceGatheringState);
+  };
+  pc.onconnectionstatechange = () => {
+    console.log('[call] connection state:', pc.connectionState);
+    if(pc.connectionState === 'connected'){ onCallConnected(); }
+    if(pc.connectionState === 'failed'){
+      toast('Call connection failed (network/firewall)');
+      endCall(true);
+    }
+    if(pc.connectionState === 'disconnected' || pc.connectionState === 'closed'){
+      if(call.state === 'in-call') endCall(true);
+    }
+  };
+  return pc;
+}
+
+// ---- grab mic (and camera for video calls). Asks permission first time. ----
+async function getMedia(wantVideo){
+  try{
+    return await navigator.mediaDevices.getUserMedia({ audio: true, video: !!wantVideo });
+  }catch(e){
+    console.error('[call] getUserMedia error', e);
+    toast(wantVideo ? 'Camera/microphone permission denied' : 'Microphone permission denied');
+    return null;
+  }
+}
+
+// Show our own camera feed in the small self-view (video calls only).
+function attachLocalVideo(){
+  if(call.kind === 'video' && call.localStream){
+    document.getElementById('localVideo').srcObject = call.localStream;
+  }
+}
+
+// ---- CALLER: click 📞 (kind='audio') or 🎥 (kind='video') ----
+async function startCall(kind){
+  if(!PEER){ return; }
+  if(call.state !== 'idle'){ toast('Already in a call'); return; }
+  if(!window.RTCPeerConnection){ toast('This browser has no WebRTC support'); return; }
+
+  call.kind = (kind === 'video') ? 'video' : 'audio';
+  call.peerId = PEER.id;
+  call.peerName = PEER.name;
+  call.state = 'calling';
+
+  const stream = await getMedia(call.kind === 'video');
+  if(!stream){ resetCall(); return; }
+  call.localStream = stream;
+  attachLocalVideo();
+
+  call.pc = makePeerConnection(PEER.id);
+  stream.getTracks().forEach(t => call.pc.addTrack(t, stream));
+
+  // Create the SDP offer and hand it to the callee — include the call kind so
+  // the callee knows whether to turn its camera on and show the video stage.
+  const offer = await call.pc.createOffer();
+  await call.pc.setLocalDescription(offer);
+  const ok = await sendSignal('offer', PEER.id, { sdp: await packSdp(call.pc.localDescription), kind: call.kind });
+  if(!ok){ toast('Could not reach that user'); endCall(false); return; }
+
+  showCallUI('calling');
+}
+
+// ---- receive any signaling event on my personal channel ----
+async function onCallSignal(data){
+  if(!data) return;
+  const { type, from_id, from_name, payload } = data;
+  console.log('%c[call] I am user #'+(ME&&ME.id)+' — got "'+type+'" from #'+from_id+' (my state: '+call.state+')','color:#f59e0b;font-weight:bold');
+
+  // Safety: ignore a signal that says it came from myself (means both tabs are
+  // logged in as the SAME user — the #1 cause of "call rings on both sides").
+  if(ME && from_id === ME.id){
+    console.warn('[call] ⚠️ signal is from my OWN id — are both devices logged in as the same user?');
+    return;
+  }
+
+  switch(type){
+    case 'offer': {
+      // Someone is calling me.
+      if(call.state !== 'idle'){
+        // I'm busy — tell them, don't disturb my current call.
+        sendSignal('busy', from_id, null);
+        return;
+      }
+      call.peerId = from_id;
+      call.peerName = from_name || ('User #' + from_id);
+      call.kind = (payload.kind === 'video') ? 'video' : 'audio';
+      call.state = 'ringing';
+      call._incomingOffer = await unpackSdp(payload.sdp);   // stash until I accept
+      showCallUI('ringing');
+      break;
+    }
+    case 'answer': {
+      // The callee accepted and sent their SDP answer.
+      if(call.state !== 'calling' || !call.pc) return;
+      await call.pc.setRemoteDescription(await unpackSdp(payload.sdp));
+      await drainPendingIce();
+      call.state = 'connecting';
+      setCallState('Connecting…');
+      break;
+    }
+    case 'ice': {
+      if(!call.pc || !payload?.candidate) return;
+      const cand = new RTCIceCandidate(payload.candidate);
+      // Buffer candidates that arrive before remoteDescription is set.
+      if(!call.pc.remoteDescription || !call.pc.remoteDescription.type){
+        call.pendingIce.push(cand);
+      }else{
+        try{ await call.pc.addIceCandidate(cand); }
+        catch(e){ console.warn('[call] addIceCandidate failed', e); }
+      }
+      break;
+    }
+    case 'decline':
+      if(call.state === 'calling'){ toast(call.peerName + ' declined'); endCall(false); }
+      break;
+    case 'busy':
+      if(call.state === 'calling'){ toast(call.peerName + ' is busy'); endCall(false); }
+      break;
+    case 'end':
+      if(call.state !== 'idle'){ endCall(false); }
+      break;
+  }
+}
+
+async function drainPendingIce(){
+  if(!call.pc) return;
+  for(const c of call.pendingIce){
+    try{ await call.pc.addIceCandidate(c); }
+    catch(e){ console.warn('[call] drain ice failed', e); }
+  }
+  call.pendingIce = [];
+}
+
+// ---- CALLEE: accept the incoming call ----
+async function acceptCall(){
+  if(call.state !== 'ringing') return;
+
+  const stream = await getMedia(call.kind === 'video');
+  if(!stream){ declineCall(); return; }
+  call.localStream = stream;
+  attachLocalVideo();
+
+  call.pc = makePeerConnection(call.peerId);
+  stream.getTracks().forEach(t => call.pc.addTrack(t, stream));
+
+  // Apply the caller's offer (already an RTCSessionDescription), then answer.
+  await call.pc.setRemoteDescription(call._incomingOffer);
+  await drainPendingIce();
+  const answer = await call.pc.createAnswer();
+  await call.pc.setLocalDescription(answer);
+  await sendSignal('answer', call.peerId, { sdp: await packSdp(call.pc.localDescription) });
+
+  call.state = 'connecting';
+  showCallUI('connecting');
+}
+
+// ---- CALLEE: decline ----
+function declineCall(){
+  if(call.peerId) sendSignal('decline', call.peerId, null);
+  endCall(false);
+}
+
+// ---- either side hangs up ----
+function hangUp(){
+  if(call.peerId) sendSignal('end', call.peerId, null);
+  endCall(false);
+}
+
+// ---- toggle mute on my mic ----
+function toggleMute(){
+  if(!call.localStream) return;
+  call.muted = !call.muted;
+  call.localStream.getAudioTracks().forEach(t => t.enabled = !call.muted);
+  const btn = document.getElementById('muteBtn');
+  if(btn){ btn.classList.toggle('on', call.muted); btn.textContent = call.muted ? '🔇' : '🎙️'; }
+}
+
+// ---- toggle my camera (video calls only) ----
+function toggleCam(){
+  if(!call.localStream) return;
+  call.camOff = !call.camOff;
+  call.localStream.getVideoTracks().forEach(t => t.enabled = !call.camOff);
+  const btn = document.getElementById('camBtn');
+  if(btn){ btn.classList.toggle('on', call.camOff); btn.textContent = call.camOff ? '📷' : '🎥'; }
+  // dim our self-view when the camera is off
+  document.getElementById('localVideo').style.opacity = call.camOff ? '.25' : '1';
+}
+
+// ---- tear everything down ----
+// notifyPeer=false means the peer already knows (they hung up / we sent 'end').
+function endCall(silent){
+  if(call.timerId){ clearInterval(call.timerId); call.timerId = null; }
+  if(call.pc){ try{ call.pc.close(); }catch{} }
+  if(call.localStream){ call.localStream.getTracks().forEach(t => t.stop()); }
+  const ra = document.getElementById('remoteAudio'); if(ra) ra.srcObject = null;
+  const rv = document.getElementById('remoteVideo'); if(rv) rv.srcObject = null;
+  const lv = document.getElementById('localVideo'); if(lv){ lv.srcObject = null; lv.style.opacity='1'; }
+  hideCallUI();
+  resetCall();
+  if(!silent){ /* nothing else — UI already hidden */ }
+}
+function resetCall(){
+  call.state='idle'; call.kind='audio'; call.peerId=null; call.peerName=''; call.pc=null;
+  call.localStream=null; call.muted=false; call.camOff=false; call.pendingIce=[];
+  call._incomingOffer=null; call.startedAt=0;
+}
+
+// ---- called once the media path is live ----
+function onCallConnected(){
+  if(call.state === 'in-call') return;
+  call.state = 'in-call';
+  call.startedAt = Date.now();
+  showCallUI('in-call');
+  call.timerId = setInterval(updateCallTimer, 1000);
+}
+function updateCallTimer(){
+  const secs = Math.floor((Date.now() - call.startedAt)/1000);
+  const mm = String(Math.floor(secs/60)).padStart(2,'0');
+  const ss = String(secs%60).padStart(2,'0');
+  setCallState(mm+':'+ss);
+}
+
+// ==========================================================================
+//  Call UI rendering
+// ==========================================================================
+function showCallUI(mode){
+  // While a video call is actually live (connecting/in-call) we use the
+  // full-screen video stage instead of the little avatar card. The card is
+  // still used for ringing/calling on BOTH kinds (before media is flowing).
+  const useVideoStage = call.kind === 'video' && (mode === 'connecting' || mode === 'in-call');
+  if(useVideoStage){ showVideoStage(mode); hideCard(); return; }
+
+  document.getElementById('videoStage').classList.remove('on');
+  const overlay = document.getElementById('callOverlay');
+  const card = document.getElementById('callCard');
+  overlay.classList.remove('hidden');
+  document.getElementById('callAvatar').textContent = initials(call.peerName);
+  document.getElementById('callAvatar').style.background = colorFor(call.peerId);
+  document.getElementById('callName').textContent = call.peerName;
+
+  const actions = document.getElementById('callActions');
+  card.classList.toggle('ringing', mode==='ringing'||mode==='calling');
+  const label = call.kind === 'video' ? 'video' : 'voice';
+
+  if(mode==='ringing'){
+    setCallState('Incoming '+label+' call…');
+    actions.innerHTML =
+      `<div class="call-action"><button class="call-round call-decline" onclick="declineCall()">✕</button><div class="call-action-label">Decline</div></div>`+
+      `<div class="call-action"><button class="call-round call-accept" onclick="acceptCall()">${call.kind==='video'?'🎥':'📞'}</button><div class="call-action-label">Accept</div></div>`;
+  }else if(mode==='calling'){
+    setCallState('Calling…');
+    actions.innerHTML =
+      `<div class="call-action"><button class="call-round call-hangup" onclick="hangUp()">✕</button><div class="call-action-label">Cancel</div></div>`;
+  }else if(mode==='connecting'){
+    setCallState('Connecting…');
+    actions.innerHTML =
+      `<div class="call-action"><button class="call-round call-hangup" onclick="hangUp()">✕</button><div class="call-action-label">Hang up</div></div>`;
+  }else if(mode==='in-call'){
+    setCallState('00:00');
+    actions.innerHTML =
+      `<div class="call-action"><button class="call-round call-mute" id="muteBtn" onclick="toggleMute()">🎙️</button><div class="call-action-label">Mute</div></div>`+
+      `<div class="call-action"><button class="call-round call-hangup" onclick="hangUp()">✕</button><div class="call-action-label">Hang up</div></div>`;
+  }
+}
+
+// Full-screen video surface (connecting + in-call for video kind).
+function showVideoStage(mode){
+  document.getElementById('videoStage').classList.add('on');
+  document.getElementById('videoName').textContent = call.peerName;
+  setCallState(mode === 'in-call' ? '00:00' : 'Connecting…');
+  // hide the peer-name hint once we're connected and remote video is showing
+  document.getElementById('videoHint').style.display = mode === 'in-call' ? 'none' : 'block';
+  document.getElementById('videoControls').innerHTML =
+    `<div class="call-action"><button class="call-round call-mute" id="muteBtn" onclick="toggleMute()">🎙️</button><div class="call-action-label">Mute</div></div>`+
+    `<div class="call-action"><button class="call-round call-mute" id="camBtn" onclick="toggleCam()">🎥</button><div class="call-action-label">Camera</div></div>`+
+    `<div class="call-action"><button class="call-round call-hangup" onclick="hangUp()">✕</button><div class="call-action-label">Hang up</div></div>`;
+}
+
+// Write the live state/timer to whichever surface is currently showing.
+function setCallState(txt){
+  const c = document.getElementById('callState'); if(c) c.textContent = txt;
+  const v = document.getElementById('videoState'); if(v) v.textContent = txt;
+}
+function hideCard(){
+  document.getElementById('callOverlay').classList.add('hidden');
+  document.getElementById('callCard').classList.remove('ringing');
+}
+function hideCallUI(){
+  hideCard();
+  document.getElementById('videoStage').classList.remove('on');
+}
+
+// Clean up a live call if the tab is closed.
+window.addEventListener('beforeunload', () => { if(call.state!=='idle') hangUp(); });
 
 // ---------- utils ----------
 function v(id){return document.getElementById(id).value;}

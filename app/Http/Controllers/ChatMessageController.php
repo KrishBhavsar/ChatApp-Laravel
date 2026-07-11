@@ -78,4 +78,31 @@ class ChatMessageController extends BaseController
 
         return $this->chatMessageService->searchUsers($term, $request->user()->id);
     }
+
+    /**
+     * Relay a WebRTC signaling message to another user (voice call handshake).
+     * The sender id is taken from the authenticated user — NOT the request body —
+     * so a caller cannot spoof someone else.
+     *
+     * @param Request $request
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function callSignal(Request $request)
+    {
+        $data = $request->validate([
+            'to_id' => ['required', 'integer', 'exists:users,id'],
+            'type' => ['required', 'string', 'in:offer,answer,ice,end,decline,busy'],
+            'payload' => ['nullable', 'array'],
+        ]);
+
+        $user = $request->user();
+
+        return $this->chatMessageService->relayCallSignal(
+            $user->id,
+            $user->name,
+            (int) $data['to_id'],
+            $data['type'],
+            $data['payload'] ?? null
+        );
+    }
 }

@@ -21,6 +21,8 @@ Route::controller(AuthController::class)->group(function () {
         // Nested Chat routes under auth
         Route::prefix('chat')->group(function () {
             Route::post('/send', [ChatMessageController::class, 'sendMessage']);
+            // Voice-call WebRTC signaling relay (offer/answer/ice/hangup)
+            Route::post('/call-signal', [ChatMessageController::class, 'callSignal']);
             Route::get('/history/{sender_id}/{receiver_id}', [ChatMessageController::class, 'getChatHistory']);
             Route::post('/mark-as-read/{sender_id}/{receiver_id}', [ChatMessageController::class, 'markAsRead']);
             Route::get('/contacts/{sender_id}', [ChatMessageController::class, 'contacts']);
