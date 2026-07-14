@@ -35,4 +35,16 @@ return [
         ],
     ],
 
+    // Metered TURN — used to mint SHORT-LIVED (ephemeral) ICE credentials so the
+    // permanent secret never ships to the browser. 'app' is your Metered app
+    // subdomain (e.g. "myapp" => myapp.metered.live); 'api_key' is the SECRET
+    // API key from the Metered dashboard (Developers → API Key) — server-only.
+    // 'static_*' are the long-lived fallback creds used if the API is down.
+    'metered' => [
+        'app' => env('METERED_APP'),
+        'api_key' => env('METERED_API_KEY'),
+        'static_username' => env('METERED_STATIC_USERNAME'),
+        'static_credential' => env('METERED_STATIC_CREDENTIAL'),
+    ],
+
 ];

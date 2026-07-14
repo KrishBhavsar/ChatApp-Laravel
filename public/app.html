@@ -714,10 +714,35 @@ window.addEventListener('beforeunload', unsubscribe);
 // Free public STUN servers (Google). STUN only discovers our public address;
 // it does NOT relay audio, so it stays free. Add a TURN entry here later if you
 // need calls to survive strict mobile/corporate NATs.
-const ICE_SERVERS = [
+// Verbose call/ICE logging. Flip to true (or run localStorage.callDebug='1' in
+// the console) when you need to triage a connection that won't establish.
+const CALL_DEBUG = (typeof localStorage !== 'undefined' && localStorage.getItem('callDebug') === '1');
+
+// ICE servers are fetched from the backend (GET /chat/ice-servers), which mints
+// SHORT-LIVED TURN credentials so no permanent secret sits in this public file.
+// This client-side list is only a FALLBACK for when that request fails — it has
+// no working TURN creds by design, so a fetch failure degrades to STUN-only.
+const ICE_SERVERS_FALLBACK = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
 ];
+// Cached ICE servers for the current call (fetched fresh per call so ephemeral
+// creds are always valid). null until the first fetch.
+let iceServersCache = null;
+async function getIceServers(){
+  try{
+    const r = await api('GET','/chat/ice-servers');
+    if(r.ok && r.json && Array.isArray(r.json.iceServers) && r.json.iceServers.length){
+      iceServersCache = r.json.iceServers;
+      if(CALL_DEBUG) console.log('[call] fetched '+iceServersCache.length+' ICE servers from backend');
+      return iceServersCache;
+    }
+    console.warn('[call] ice-servers fetch returned no servers, using fallback', r.status);
+  }catch(e){
+    console.warn('[call] ice-servers fetch failed, using fallback', e);
+  }
+  return ICE_SERVERS_FALLBACK;
+}
 
 const call = {
   state: 'idle',      // idle | calling | ringing | connecting | in-call
@@ -728,6 +753,9 @@ const call = {
   localStream: null,  // our microphone (+ camera for video calls)
   muted: false,
   camOff: false,      // video calls: is our camera turned off?
+  screenOn: false,    // video calls: am I currently sharing my screen?
+  camTrack: null,     // saved camera track, so we can swap back after sharing
+  screenStream: null, // the getDisplayMedia stream (so we can stop it cleanly)
   timerId: null,
   startedAt: 0,
   // ICE candidates that arrive before the remote description is set must be
@@ -740,7 +768,7 @@ async function sendSignal(type, toId, payload){
   const r = await api('POST','/chat/call-signal',{ to_id: toId, type, payload: payload||null });
   if(!r.ok) console.error('[call] signal send failed', type, r.status, r.json);
   return r.ok;
-}x
+}
 
 // ---- SDP encode/decode (gzip + base64) ----
 // Two problems solved here:
@@ -777,12 +805,27 @@ async function unpackSdp(obj){
 }
 
 // ---- build the RTCPeerConnection and wire its event handlers ----
-function makePeerConnection(otherId){
-  const pc = new RTCPeerConnection({ iceServers: ICE_SERVERS });
+// iceServers is the list fetched from the backend (or the fallback).
+function makePeerConnection(otherId, iceServers){
+  const pc = new RTCPeerConnection({ iceServers: iceServers || ICE_SERVERS_FALLBACK });
 
   // Our locally-discovered network paths -> ship each to the other side.
   pc.onicecandidate = (e) => {
-    if(e.candidate){ sendSignal('ice', otherId, { candidate: e.candidate }); }
+    if(e.candidate){
+      // Log the candidate TYPE so we can see if TURN is working:
+      //   host  = our LAN address    srflx = our public IP (via STUN)
+      //   relay = via the TURN server  <-- MUST see this for cross-NAT calls
+      const c = e.candidate;
+      if(CALL_DEBUG){
+        const color = c.type === 'relay' ? '#22c55e' : (c.type === 'srflx' ? '#f59e0b' : '#94a3b8');
+        console.log('%c[call] 🧊 my candidate: '+c.type+' ('+c.protocol+') '+(c.address||''), 'color:'+color);
+      }
+      sendSignal('ice', otherId, { candidate: c });
+    }
+  };
+  pc.onicecandidateerror = (e) => {
+    // Fires when a STUN/TURN server rejects us (bad creds, unreachable, etc.)
+    console.warn('[call] ❌ ICE candidate error', e.errorCode, e.errorText, 'url:', e.url);
   };
 
   // The other person's media arrived -> play it. For a video call the remote
@@ -798,13 +841,13 @@ function makePeerConnection(otherId){
   };
 
   pc.oniceconnectionstatechange = () => {
-    console.log('%c[call] ICE state: '+pc.iceConnectionState, 'color:#06b6d4');
+    if(CALL_DEBUG) console.log('%c[call] ICE state: '+pc.iceConnectionState, 'color:#06b6d4');
   };
   pc.onicegatheringstatechange = () => {
-    console.log('[call] ICE gathering:', pc.iceGatheringState);
+    if(CALL_DEBUG) console.log('[call] ICE gathering:', pc.iceGatheringState);
   };
   pc.onconnectionstatechange = () => {
-    console.log('[call] connection state:', pc.connectionState);
+    if(CALL_DEBUG) console.log('[call] connection state:', pc.connectionState);
     if(pc.connectionState === 'connected'){ onCallConnected(); }
     if(pc.connectionState === 'failed'){
       toast('Call connection failed (network/firewall)');
@@ -824,6 +867,17 @@ async function getMedia(wantVideo){
   }catch(e){
     console.error('[call] getUserMedia error', e);
     toast(wantVideo ? 'Camera/microphone permission denied' : 'Microphone permission denied');
+    return null;
+  }
+}
+
+// ---- grab the screen/window/tab the user picks (video calls only). ----
+// Returns null if the user hits "Cancel" in the picker — that's not an error.
+async function getScreen(){
+  try{
+    return await navigator.mediaDevices.getDisplayMedia({ video: true });
+  }catch(e){
+    console.warn('[call] getDisplayMedia cancelled/denied', e);
     return null;
   }
 }
@@ -851,7 +905,10 @@ async function startCall(kind){
   call.localStream = stream;
   attachLocalVideo();
 
-  call.pc = makePeerConnection(PEER.id);
+  const iceServers = await getIceServers();
+  // Guard: user may have cancelled/ended during the async fetch above.
+  if(call.state !== 'calling'){ stream.getTracks().forEach(t=>t.stop()); return; }
+  call.pc = makePeerConnection(PEER.id, iceServers);
   stream.getTracks().forEach(t => call.pc.addTrack(t, stream));
 
   // Create the SDP offer and hand it to the callee — include the call kind so
@@ -903,10 +960,14 @@ async function onCallSignal(data){
       break;
     }
     case 'ice': {
-      if(!call.pc || !payload?.candidate) return;
+      if(!payload?.candidate) return;
       const cand = new RTCIceCandidate(payload.candidate);
-      // Buffer candidates that arrive before remoteDescription is set.
-      if(!call.pc.remoteDescription || !call.pc.remoteDescription.type){
+      // Buffer the candidate if the peer connection doesn't exist yet (I'm still
+      // 'ringing' and haven't accepted, so acceptCall() hasn't built call.pc) OR
+      // the remote description isn't set yet. Draining happens in acceptCall()
+      // (callee) / on 'answer' (caller). Dropping these early candidates is what
+      // made the caller's relay path disappear and the call never connect.
+      if(!call.pc || !call.pc.remoteDescription || !call.pc.remoteDescription.type){
         call.pendingIce.push(cand);
       }else{
         try{ await call.pc.addIceCandidate(cand); }
@@ -944,7 +1005,10 @@ async function acceptCall(){
   call.localStream = stream;
   attachLocalVideo();
 
-  call.pc = makePeerConnection(call.peerId);
+  const iceServers = await getIceServers();
+  // Guard: caller may have hung up (state left 'ringing') during the fetch.
+  if(call.state !== 'ringing'){ stream.getTracks().forEach(t=>t.stop()); return; }
+  call.pc = makePeerConnection(call.peerId, iceServers);
   stream.getTracks().forEach(t => call.pc.addTrack(t, stream));
 
   // Apply the caller's offer (already an RTCSessionDescription), then answer.
@@ -990,11 +1054,72 @@ function toggleCam(){
   document.getElementById('localVideo').style.opacity = call.camOff ? '.25' : '1';
 }
 
+// ---- toggle screen sharing (video calls only) ----
+// Swaps the outgoing VIDEO track inside the existing RTCRtpSender. Because the
+// sender is untouched, no SDP renegotiation happens — the remote's ontrack
+// already holds the stream, so their picture just changes from our camera to
+// our screen. Audio (mic) is never touched, so voice keeps flowing throughout.
+async function toggleScreenShare(){
+  if(!call.pc || call.kind !== 'video') return;
+  const sender = call.pc.getSenders().find(s => s.track && s.track.kind === 'video');
+  if(!sender){ return; }
+
+  if(!call.screenOn){
+    // --- START sharing ---
+    const screen = await getScreen();
+    if(!screen) return;                       // user cancelled the picker
+    const screenTrack = screen.getVideoTracks()[0];
+    if(!screenTrack){ screen.getTracks().forEach(t=>t.stop()); return; }
+
+    // Remember our camera track so we can restore it later.
+    call.camTrack = sender.track;
+    call.screenStream = screen;
+
+    await sender.replaceTrack(screenTrack);
+    // Show the screen in our own self-view too, so we see what we're sharing.
+    document.getElementById('localVideo').srcObject = screen;
+    document.getElementById('localVideo').style.opacity = '1';
+
+    // The browser's native "Stop sharing" bar ends the track directly — revert
+    // when that happens so our button state doesn't desync.
+    screenTrack.onended = () => { if(call.screenOn) stopScreenShare(); };
+
+    call.screenOn = true;
+    setScreenBtn(true);
+  }else{
+    stopScreenShare();
+  }
+}
+
+// Restore the camera track and tear down the screen capture.
+async function stopScreenShare(){
+  const sender = call.pc && call.pc.getSenders().find(s => s.track && s.track.kind === 'video');
+  if(sender && call.camTrack){
+    try{ await sender.replaceTrack(call.camTrack); }catch(e){ console.warn('[call] restore cam failed', e); }
+  }
+  if(call.screenStream){ call.screenStream.getTracks().forEach(t=>t.stop()); call.screenStream = null; }
+  // Put our camera back in the self-view (respecting a camera-off toggle).
+  if(call.localStream){
+    document.getElementById('localVideo').srcObject = call.localStream;
+    document.getElementById('localVideo').style.opacity = call.camOff ? '.25' : '1';
+  }
+  call.camTrack = null;
+  call.screenOn = false;
+  setScreenBtn(false);
+}
+
+// Reflect share state on the button.
+function setScreenBtn(on){
+  const btn = document.getElementById('screenBtn');
+  if(btn){ btn.classList.toggle('on', on); btn.title = on ? 'Stop sharing' : 'Share screen'; }
+}
+
 // ---- tear everything down ----
 // notifyPeer=false means the peer already knows (they hung up / we sent 'end').
 function endCall(silent){
   if(call.timerId){ clearInterval(call.timerId); call.timerId = null; }
   if(call.pc){ try{ call.pc.close(); }catch{} }
+  if(call.screenStream){ call.screenStream.getTracks().forEach(t => t.stop()); }
   if(call.localStream){ call.localStream.getTracks().forEach(t => t.stop()); }
   const ra = document.getElementById('remoteAudio'); if(ra) ra.srcObject = null;
   const rv = document.getElementById('remoteVideo'); if(rv) rv.srcObject = null;
@@ -1006,6 +1131,7 @@ function endCall(silent){
 function resetCall(){
   call.state='idle'; call.kind='audio'; call.peerId=null; call.peerName=''; call.pc=null;
   call.localStream=null; call.muted=false; call.camOff=false; call.pendingIce=[];
+  call.screenOn=false; call.camTrack=null; call.screenStream=null;
   call._incomingOffer=null; call.startedAt=0;
 }
 
@@ -1077,6 +1203,7 @@ function showVideoStage(mode){
   document.getElementById('videoControls').innerHTML =
     `<div class="call-action"><button class="call-round call-mute" id="muteBtn" onclick="toggleMute()">🎙️</button><div class="call-action-label">Mute</div></div>`+
     `<div class="call-action"><button class="call-round call-mute" id="camBtn" onclick="toggleCam()">🎥</button><div class="call-action-label">Camera</div></div>`+
+    `<div class="call-action"><button class="call-round call-mute" id="screenBtn" title="Share screen" onclick="toggleScreenShare()">🖥️</button><div class="call-action-label">Share</div></div>`+
     `<div class="call-action"><button class="call-round call-hangup" onclick="hangUp()">✕</button><div class="call-action-label">Hang up</div></div>`;
 }
 

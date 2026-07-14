@@ -6,6 +6,8 @@ use App\Http\Base\BaseController;
 use App\Http\Requests\Chat\SendMessageRequest;
 use App\Services\ChatMessageService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Http;
+use Illuminate\Support\Facades\Log;
 
 class ChatMessageController extends BaseController
 {
@@ -104,5 +106,76 @@ class ChatMessageController extends BaseController
             $data['type'],
             $data['payload'] ?? null
         );
+    }
+
+    /**
+     * Return the ICE servers (STUN + TURN) for a WebRTC call.
+     *
+     * When a Metered API key is configured we fetch SHORT-LIVED (ephemeral)
+     * TURN credentials from Metered so the permanent secret never reaches the
+     * browser. If that call fails — or no API key is set — we fall back to the
+     * long-lived static credentials from config, so calls keep working.
+     *
+     * @return \Illuminate\Http\JsonResponse
+     */
+    public function iceServers()
+    {
+        $app = config('services.metered.app');
+        $apiKey = config('services.metered.api_key');
+
+        if ($app && $apiKey) {
+            try {
+                $res = Http::timeout(4)->get(
+                    "https://{$app}.metered.live/api/v1/turn/credentials",
+                    ['apiKey' => $apiKey]
+                );
+
+                // Metered returns a ready-to-use array of iceServers objects.
+                if ($res->successful() && is_array($res->json())) {
+                    return response()->json(['iceServers' => $res->json()]);
+                }
+
+                Log::warning('Metered TURN credentials request failed', [
+                    'status' => $res->status(),
+                ]);
+            } catch (\Throwable $e) {
+                Log::warning('Metered TURN credentials request threw', [
+                    'message' => $e->getMessage(),
+                ]);
+            }
+        }
+
+        // Fallback: static credentials (still keeps calls connecting).
+        return response()->json(['iceServers' => $this->staticIceServers()]);
+    }
+
+    /**
+     * Static ICE-server list used as a fallback when ephemeral creds can't be
+     * fetched. Mirrors the client-side default so behaviour is identical.
+     *
+     * @return array<int, array<string, mixed>>
+     */
+    private function staticIceServers(): array
+    {
+        $user = config('services.metered.static_username');
+        $cred = config('services.metered.static_credential');
+
+        $servers = [
+            ['urls' => 'stun:stun.l.google.com:19302'],
+            ['urls' => 'stun:stun1.l.google.com:19302'],
+        ];
+
+        if ($user && $cred) {
+            foreach ([
+                'turn:global.relay.metered.ca:80',
+                'turn:global.relay.metered.ca:80?transport=tcp',
+                'turn:global.relay.metered.ca:443',
+                'turns:global.relay.metered.ca:443?transport=tcp',
+            ] as $url) {
+                $servers[] = ['urls' => $url, 'username' => $user, 'credential' => $cred];
+            }
+        }
+
+        return $servers;
     }
 }
