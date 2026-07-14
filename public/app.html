@@ -43,6 +43,15 @@
     .login-card{padding:24px 20px;border-radius:14px}
     .login-card h1{font-size:20px}
   }
+  /* Short / landscape viewports: let the login card scroll instead of clipping,
+     and tighten its vertical rhythm so it fits under the fold. */
+  @media(max-height:560px){
+    #login{align-items:flex-start;overflow-y:auto;padding-top:16px;padding-bottom:16px}
+    .login-card{padding:20px}
+    .login-card .sub{margin-bottom:16px}
+    .tabs{margin-bottom:14px}
+    .field{margin-bottom:10px}
+  }
   .login-card h1{font-size:22px;margin-bottom:4px;display:flex;align-items:center;gap:10px}
   .login-card .sub{color:var(--muted);font-size:13px;margin-bottom:24px}
   .tabs{display:flex;gap:4px;background:var(--panel2);padding:4px;border-radius:10px;margin-bottom:20px}
@@ -64,6 +73,19 @@
   #app{height:100vh;display:grid;grid-template-columns:320px 1fr}
   @media(min-width:1400px){#app{grid-template-columns:380px 1fr}}
   @media(max-width:960px){#app{grid-template-columns:280px 1fr}}
+  /* Mid-tablet (768–960px): both columns stay visible but the sidebar is tight,
+     so trim its horizontal padding and cap message width for a roomier chat. */
+  @media(min-width:768px) and (max-width:960px){
+    .me{padding:14px 12px}
+    .search{padding:10px 12px}
+    #searchResults{left:12px;right:12px}
+    .list-title{padding:10px 12px 6px}
+    .contact{padding:11px 12px}
+    .chat-head{padding:12px 14px}
+    .messages{padding:16px}
+    .msg{max-width:78%}
+    .composer{padding:12px 14px}
+  }
   /* Phones/small tablets: single column — swap between list and chat views. */
   @media(max-width:720px){
     #app{grid-template-columns:1fr}
@@ -82,7 +104,7 @@
 
   .search{padding:12px 16px;border-bottom:1px solid var(--border)}
   .search input{width:100%;background:var(--panel2);border:1px solid var(--border);color:var(--text);padding:9px 12px;border-radius:8px;outline:none;font-size:13.5px}
-  #searchResults{position:absolute;top:calc(100% + 4px);left:16px;right:16px;background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.5);z-index:50;max-height:280px;overflow-y:auto}
+  #searchResults{position:absolute;top:calc(100% + 4px);left:16px;right:16px;background:var(--panel);border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.5);z-index:50;max-height:min(280px,50vh);overflow-y:auto}
   .sresult{display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer}
   .sresult:hover{background:var(--panel2)}
   .sresult .info{flex:1;min-width:0}
@@ -112,7 +134,7 @@
   .chat-head .status{color:var(--muted);font-size:12px}
   .chat-head .spacer{flex:1}
   .messages{flex:1;overflow-y:auto;padding:20px;display:flex;flex-direction:column;gap:8px;min-height:0}
-  .msg{max-width:min(72%,520px);padding:9px 13px;border-radius:14px;font-size:14px;line-height:1.45;word-wrap:break-word;position:relative}
+  .msg{max-width:min(72%,520px);padding:9px 13px;border-radius:14px;font-size:14px;line-height:1.45;word-wrap:break-word;overflow-wrap:anywhere;position:relative}
   .msg .t{font-size:10.5px;opacity:.6;margin-top:4px;text-align:right}
   .msg.them{background:var(--them);align-self:flex-start;border-bottom-left-radius:4px}
   .msg.me{background:var(--me);color:#fff;align-self:flex-end;border-bottom-right-radius:4px}
@@ -187,6 +209,16 @@
   /* control bar pinned to the bottom of the video stage */
   .video-controls{position:absolute;left:0;right:0;bottom:0;padding:20px 18px calc(28px + env(safe-area-inset-bottom));display:flex;gap:18px;justify-content:center;z-index:3;background:linear-gradient(transparent,rgba(0,0,0,.55))}
   @media(max-width:720px){#localVideo{width:96px;height:128px;right:12px}}
+  /* Landscape / short screens: shrink the call card + avatar so accept/decline
+     stay on-screen, and lift the video self-view above the shorter control bar. */
+  @media(max-height:560px){
+    .call-card{padding:20px 22px}
+    .call-card .call-avatar{width:64px;height:64px;font-size:24px;margin-bottom:12px}
+    .call-card .call-state{margin-bottom:16px}
+    .call-round{width:52px;height:52px;font-size:20px}
+    .video-controls{padding:12px 18px calc(14px + env(safe-area-inset-bottom))}
+    #localVideo{width:84px;height:112px;bottom:calc(84px + env(safe-area-inset-bottom))}
+  }
 </style>
 </head>
 <body>
