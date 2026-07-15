@@ -1,0 +1,19 @@
+# FrankenPHP / Caddy config for the Laravel app.
+# SERVER_NAME (set in docker-entrypoint.sh from Render's $PORT) supplies the
+# listen address, e.g. ":8000".
+{
+	frankenphp
+	# Render terminates TLS at its edge and forwards plain HTTP to us, so disable
+	# Caddy's automatic HTTPS — otherwise it tries (and fails) to provision certs.
+	auto_https off
+}
+
+{$SERVER_NAME} {
+	root * /app/public
+	encode zstd br gzip
+
+	# php_server handles Laravel's front controller: it serves existing static
+	# files (like /app.html, /favicon.ico) directly and routes everything else
+	# through public/index.php. Requests are processed CONCURRENTLY.
+	php_server
+}
