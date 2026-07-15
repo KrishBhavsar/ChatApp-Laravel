@@ -7,6 +7,7 @@ use App\Events\MessageSentEvent;
 use App\Helper\ResponseHelper;
 use App\Http\Resources\ChatMessageResource;
 use App\Interface\ChatMessageInterface;
+use Illuminate\Support\Facades\Log;
 
 class ChatMessageService
 {
@@ -55,7 +56,16 @@ class ChatMessageService
      */
     public function relayCallSignal(int $fromId, string $fromName, int $toId, string $type, ?array $payload = null)
     {
+        // TEMP DIAGNOSTIC: time the broadcast() call. Because CallSignalEvent is
+        // ShouldBroadcastNow, this line makes a BLOCKING outbound HTTPS call to
+        // Pusher inside the request. If Render logs show broadcast_ms in the
+        // thousands (~30000), the hang is the outbound Pusher call — not the app.
+        $start = microtime(true);
+
         broadcast(new CallSignalEvent($type, $fromId, $toId, $fromName, $payload));
+
+        $ms = (int) round((microtime(true) - $start) * 1000);
+        Log::info('call-signal broadcast timing', ['type' => $type, 'broadcast_ms' => $ms]);
 
         return ResponseHelper::success(
             'success',

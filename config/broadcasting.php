@@ -73,6 +73,13 @@ return [
             ],
             'client_options' => [
                 'verify' => env('APP_ENV') === 'production',
+                // Cap the outbound HTTPS call to Pusher. Because CallSignalEvent /
+                // MessageSentEvent use ShouldBroadcastNow, broadcast() blocks the
+                // request on this call. Without a timeout it can hang ~30s on the
+                // default socket timeout (seen on Render's free tier), which is
+                // exactly the "Accept freezes for 30-40s" symptom. Fail fast instead.
+                'timeout' => (float) env('PUSHER_TIMEOUT', 5),
+                'connect_timeout' => (float) env('PUSHER_CONNECT_TIMEOUT', 3),
             ],
         ],
 
