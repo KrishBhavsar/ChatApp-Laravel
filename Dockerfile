@@ -38,6 +38,13 @@ RUN composer install --no-dev --optimize-autoloader --no-scripts --no-interactio
 COPY . .
 RUN composer dump-autoload --optimize --no-scripts
 
+# Render's container sandbox refuses the CAP_NET_BIND_SERVICE capability the
+# frankenphp binary ships with, which makes it fail to exec with
+# "Operation not permitted" (status 126). We never bind a privileged port —
+# Render always hands us a high $PORT — so strip the capability entirely.
+# This is FrankenPHP's documented fix for unprivileged/sandboxed environments.
+RUN setcap -r /usr/local/bin/frankenphp
+
 # Explicit Caddyfile controls how FrankenPHP serves the app (see the file).
 COPY Caddyfile /etc/frankenphp/Caddyfile
 
