@@ -1022,8 +1022,19 @@ async function startCall(kind){
   // the callee knows whether to turn its camera on and show the video stage.
   const offer = await call.pc.createOffer();
   await call.pc.setLocalDescription(offer);
-  const ok = await sendSignal('offer', PEER.id, { sdp: await packSdp(call.pc.localDescription), kind: call.kind });
-  if(!ok){ toast('Could not reach that user'); endCall(false); return; }
+
+  // Relay the offer in the background (NOT awaited). We already show "Calling…",
+  // so blocking here on the Pusher relay would just freeze the caller's UI the
+  // same way it froze Accept. If the relay fails, tear the call down then.
+  const packed = await packSdp(call.pc.localDescription);
+  sendSignal('offer', PEER.id, { sdp: packed, kind: call.kind })
+    .then(ok => {
+      if(!ok && call.state === 'calling'){ toast('Could not reach that user'); endCall(false); }
+    })
+    .catch(e => {
+      console.error('[call] offer relay failed', e);
+      if(call.state === 'calling'){ toast('Could not reach that user'); endCall(false); }
+    });
 }
 
 // ---- receive any signaling event on my personal channel ----
@@ -1127,10 +1138,22 @@ async function acceptCall(){
   await drainPendingIce();
   const answer = await call.pc.createAnswer();
   await call.pc.setLocalDescription(answer);
-  await sendSignal('answer', call.peerId, { sdp: await packSdp(call.pc.localDescription) });
 
+  // Flip to the connecting UI IMMEDIATELY — the moment we have our local answer.
+  // The peer connection is already negotiating; the UI must NOT wait on the
+  // sendSignal() round-trip below. On Render's free tier relaying through Pusher
+  // can take seconds, and awaiting it here is exactly what made Accept "freeze
+  // for 30-40s" even though the media had already connected (state stayed
+  // 'ringing' because this line hadn't run yet). Locally the relay is ~100ms so
+  // the freeze was invisible — same bug, just hidden by fast networking.
   call.state = 'connecting';
   showCallUI('connecting');
+
+  // Relay the answer to the caller in the background (NOT awaited).
+  const packed = await packSdp(call.pc.localDescription);
+  sendSignal('answer', call.peerId, { sdp: packed })
+    .then(ok => { if(!ok) toast('Answer may not have reached the caller'); })
+    .catch(e => console.error('[call] answer relay failed', e));
 }
 
 // ---- CALLEE: decline ----
