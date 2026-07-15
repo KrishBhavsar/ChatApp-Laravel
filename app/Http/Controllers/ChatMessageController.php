@@ -6,6 +6,7 @@ use App\Http\Base\BaseController;
 use App\Http\Requests\Chat\SendMessageRequest;
 use App\Services\ChatMessageService;
 use Illuminate\Http\Request;
+use Illuminate\Support\Facades\Cache;
 use Illuminate\Support\Facades\Http;
 use Illuminate\Support\Facades\Log;
 
@@ -124,25 +125,41 @@ class ChatMessageController extends BaseController
         $apiKey = config('services.metered.api_key');
 
         if ($app && $apiKey) {
-            try {
-                $res = Http::timeout(4)->get(
-                    "https://{$app}.metered.live/api/v1/turn/credentials",
-                    ['apiKey' => $apiKey]
-                );
+            // Cache the minted creds for a few minutes. metered.live is an external
+            // HTTPS round-trip that dominates this endpoint's latency (especially on
+            // Render's free tier); the creds are valid for hours, so serving a cached
+            // copy is safe and keeps the call/accept hot path off the external hop.
+            $cached = Cache::remember('turn.ice_servers', now()->addMinutes(10), function () use ($app, $apiKey) {
+                try {
+                    $res = Http::timeout(4)->get(
+                        "https://{$app}.metered.live/api/v1/turn/credentials",
+                        ['apiKey' => $apiKey]
+                    );
 
-                // Metered returns a ready-to-use array of iceServers objects.
-                if ($res->successful() && is_array($res->json())) {
-                    return response()->json(['iceServers' => $res->json()]);
+                    // Metered returns a ready-to-use array of iceServers objects.
+                    if ($res->successful() && is_array($res->json())) {
+                        return $res->json();
+                    }
+
+                    Log::warning('Metered TURN credentials request failed', [
+                        'status' => $res->status(),
+                    ]);
+                } catch (\Throwable $e) {
+                    Log::warning('Metered TURN credentials request threw', [
+                        'message' => $e->getMessage(),
+                    ]);
                 }
 
-                Log::warning('Metered TURN credentials request failed', [
-                    'status' => $res->status(),
-                ]);
-            } catch (\Throwable $e) {
-                Log::warning('Metered TURN credentials request threw', [
-                    'message' => $e->getMessage(),
-                ]);
+                // Return null so the failure is NOT cached — next request retries.
+                return null;
+            });
+
+            if (is_array($cached) && $cached !== []) {
+                return response()->json(['iceServers' => $cached]);
             }
+
+            // Don't let a failed fetch linger in the cache.
+            Cache::forget('turn.ice_servers');
         }
 
         // Fallback: static credentials (still keeps calls connecting).

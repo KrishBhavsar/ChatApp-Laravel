@@ -413,6 +413,7 @@ function enterApp(){
   document.getElementById('adminbar').classList.toggle('hidden', ME.role!=='admin');
   loadContacts();
   subscribeToMe();   // listen on my personal channel so NEW conversations appear live
+  prefetchIceServers();   // warm TURN creds now so the first call doesn't wait on them
 }
 
 // ---------- Contacts ----------
@@ -798,23 +799,51 @@ const ICE_SERVERS_FALLBACK = [
   { urls: 'stun:stun.l.google.com:19302' },
   { urls: 'stun:stun1.l.google.com:19302' },
 ];
-// Cached ICE servers for the current call (fetched fresh per call so ephemeral
-// creds are always valid). null until the first fetch.
+// Cached ICE servers. The backend hits metered.live (a blocking server-to-server
+// round-trip) to mint these — on Render's free tier that alone can cost seconds.
+// Metered's ephemeral creds live for hours, so caching them for a few minutes is
+// safe and removes that round-trip from the hot path of every call/accept.
 let iceServersCache = null;
+let iceServersFetchedAt = 0;
+let iceServersInflight = null;          // dedupe concurrent fetches
+const ICE_CACHE_MS = 5 * 60 * 1000;     // 5 min — well under metered's TTL
+
 async function getIceServers(){
-  try{
-    const r = await api('GET','/chat/ice-servers');
-    if(r.ok && r.json && Array.isArray(r.json.iceServers) && r.json.iceServers.length){
-      iceServersCache = r.json.iceServers;
-      if(CALL_DEBUG) console.log('[call] fetched '+iceServersCache.length+' ICE servers from backend');
-      return iceServersCache;
-    }
-    console.warn('[call] ice-servers fetch returned no servers, using fallback', r.status);
-  }catch(e){
-    console.warn('[call] ice-servers fetch failed, using fallback', e);
+  // Fresh cache hit → return instantly, no network at all.
+  if(iceServersCache && (perfNow() - iceServersFetchedAt) < ICE_CACHE_MS){
+    if(CALL_DEBUG) console.log('[call] using cached ICE servers');
+    return iceServersCache;
   }
-  return ICE_SERVERS_FALLBACK;
+  // A fetch is already running (e.g. prefetch + call fired together) → await it.
+  if(iceServersInflight) return iceServersInflight;
+
+  iceServersInflight = (async () => {
+    try{
+      const r = await api('GET','/chat/ice-servers');
+      if(r.ok && r.json && Array.isArray(r.json.iceServers) && r.json.iceServers.length){
+        iceServersCache = r.json.iceServers;
+        iceServersFetchedAt = perfNow();
+        if(CALL_DEBUG) console.log('[call] fetched '+iceServersCache.length+' ICE servers from backend');
+        return iceServersCache;
+      }
+      console.warn('[call] ice-servers fetch returned no servers, using fallback', r.status);
+    }catch(e){
+      console.warn('[call] ice-servers fetch failed, using fallback', e);
+    }
+    // On failure return the fallback but DON'T poison the cache — next call retries.
+    return iceServersCache || ICE_SERVERS_FALLBACK;
+  })();
+
+  try{ return await iceServersInflight; }
+  finally{ iceServersInflight = null; }
 }
+
+// Warm the ICE cache in the background (called at login). Failures are silent —
+// getIceServers() will just fetch on demand if this didn't land in time.
+function prefetchIceServers(){ getIceServers().catch(()=>{}); }
+
+// performance.now() is monotonic and available; falls back gracefully.
+function perfNow(){ return (typeof performance!=='undefined' && performance.now) ? performance.now() : 0; }
 
 const call = {
   state: 'idle',      // idle | calling | ringing | connecting | in-call
@@ -971,14 +1000,20 @@ async function startCall(kind){
   call.peerId = PEER.id;
   call.peerName = PEER.name;
   call.state = 'calling';
+  // Show the calling UI immediately so it never feels like a dead click while
+  // the mic prompt / network fetch resolve.
+  showCallUI('calling');
 
+  // Kick off the mic/camera grab and the ICE-server fetch CONCURRENTLY — they're
+  // independent, so overlapping them shaves a round-trip off the perceived delay.
+  const icePromise = getIceServers();
   const stream = await getMedia(call.kind === 'video');
-  if(!stream){ resetCall(); return; }
+  if(!stream){ resetCall(); hideCallUI(); return; }
   call.localStream = stream;
   attachLocalVideo();
 
-  const iceServers = await getIceServers();
-  // Guard: user may have cancelled/ended during the async fetch above.
+  const iceServers = await icePromise;
+  // Guard: user may have cancelled/ended during the async work above.
   if(call.state !== 'calling'){ stream.getTracks().forEach(t=>t.stop()); return; }
   call.pc = makePeerConnection(PEER.id, iceServers);
   stream.getTracks().forEach(t => call.pc.addTrack(t, stream));
@@ -989,8 +1024,6 @@ async function startCall(kind){
   await call.pc.setLocalDescription(offer);
   const ok = await sendSignal('offer', PEER.id, { sdp: await packSdp(call.pc.localDescription), kind: call.kind });
   if(!ok){ toast('Could not reach that user'); endCall(false); return; }
-
-  showCallUI('calling');
 }
 
 // ---- receive any signaling event on my personal channel ----
@@ -1020,6 +1053,9 @@ async function onCallSignal(data){
       call.state = 'ringing';
       call._incomingOffer = await unpackSdp(payload.sdp);   // stash until I accept
       showCallUI('ringing');
+      // Warm the ICE cache WHILE the phone rings, so acceptCall() finds it ready
+      // and doesn't stall on the metered.live round-trip after the user taps Accept.
+      prefetchIceServers();
       break;
     }
     case 'answer': {
@@ -1072,12 +1108,15 @@ async function drainPendingIce(){
 async function acceptCall(){
   if(call.state !== 'ringing') return;
 
+  // Grab media and ICE servers CONCURRENTLY. The ICE fetch usually resolves
+  // instantly here because we prefetched it while the phone was ringing.
+  const icePromise = getIceServers();
   const stream = await getMedia(call.kind === 'video');
   if(!stream){ declineCall(); return; }
   call.localStream = stream;
   attachLocalVideo();
 
-  const iceServers = await getIceServers();
+  const iceServers = await icePromise;
   // Guard: caller may have hung up (state left 'ringing') during the fetch.
   if(call.state !== 'ringing'){ stream.getTracks().forEach(t=>t.stop()); return; }
   call.pc = makePeerConnection(call.peerId, iceServers);
